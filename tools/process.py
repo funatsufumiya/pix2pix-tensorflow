@@ -24,7 +24,7 @@ parser.add_argument("--operation", required=True, choices=["grayscale", "resize"
 parser.add_argument("--workers", type=int, default=1, help="number of workers")
 # resize
 parser.add_argument("--pad", action="store_true", help="pad instead of crop for resize operation")
-parser.add_argument("--size", type=int, default=256, help="size to use for resize operation")
+parser.add_argument("--size", type=int, default=1024, help="size to use for resize operation")
 # combine
 parser.add_argument("--b_dir", type=str, help="path to folder containing B images for combine operation")
 a = parser.parse_args()
@@ -89,7 +89,7 @@ def combine(src, src_path):
     height, width, _ = src.shape
     if height != sibling.shape[0] or width != sibling.shape[1]:
         raise Exception("differing sizes")
-    
+
     # convert both images to RGB if necessary
     if src.shape[2] == 1:
         src = im.grayscale_to_rgb(images=src)
@@ -100,7 +100,7 @@ def combine(src, src_path):
     # remove alpha channel
     if src.shape[2] == 4:
         src = src[:,:,:3]
-    
+
     if sibling.shape[2] == 4:
         sibling = sibling[:,:,:3]
 
@@ -122,13 +122,13 @@ def run_caffe(src):
         # using this requires using the docker image or assembling a bunch of dependencies
         # and then changing these hardcoded paths
         net = caffe.Net("/opt/caffe/examples/hed/deploy.prototxt", "/opt/caffe/hed_pretrained_bsds.caffemodel", caffe.TEST)
-        
+
     net.blobs["data"].reshape(1, *src.shape)
     net.blobs["data"].data[...] = src
     net.forward()
     return net.blobs["sigmoid-fuse"].data[0][0,:,:]
 
-    
+
 def edges(src):
     # based on https://github.com/phillipi/pix2pix/blob/master/scripts/edges/batch_hed.py
     # and https://github.com/phillipi/pix2pix/blob/master/scripts/edges/PostprocessHED.m
@@ -147,7 +147,7 @@ def edges(src):
 
     with tempfile.NamedTemporaryFile(suffix=".png") as png_file, tempfile.NamedTemporaryFile(suffix=".mat") as mat_file:
         scipy.io.savemat(mat_file.name, {"input": fuse})
-        
+
         octave_code = r"""
 E = 1-load(input_path).input;
 E = imresize(E, [image_width,image_width]);
@@ -169,7 +169,7 @@ imwrite(E, output_path);
         config = dict(
             input_path="'%s'" % mat_file.name,
             output_path="'%s'" % png_file.name,
-            image_width=256,
+            image_width=1024,
             threshold=25.0/255.0,
             small_edge=5,
         )
@@ -247,17 +247,17 @@ def main():
         else:
             src_paths.append(src_path)
             dst_paths.append(dst_path)
-    
+
     print("skipping %d files that already exist" % skipped)
-            
+
     global total
     total = len(src_paths)
-    
+
     print("processing %d files" % total)
 
     global start
     start = time.time()
-    
+
     if a.operation == "edges":
         # use a multiprocessing pool for this operation so it can use multiple CPUs
         # create the pool before we launch processing threads
@@ -296,7 +296,7 @@ def main():
                 t = threading.Thread(target=worker, args=(coord,))
                 t.start()
                 threads.append(t)
-            
+
             try:
                 coord.join(threads)
             except KeyboardInterrupt:
