@@ -1,3 +1,11 @@
+# Changes compared to [affinelayer/pix2pix-tensorflow](https://github.com/affinelayer/pix2pix-tensorflow)
+
+- Input, output size increased to 1024 - more layers!
+
+My [Face2face](https://github.com/karolmajek/face2face-demo) was the reason.
+
+----------------------------------
+
 # pix2pix-tensorflow
 
 Based on [pix2pix](https://phillipi.github.io/pix2pix/) by Isola et al.
