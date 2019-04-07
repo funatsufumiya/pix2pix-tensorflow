@@ -1,3 +1,8 @@
+# Changes compared to [karolmajek/pix2pix-tensorflow](https://github.com/karolmajek/pix2pix-tensorflow)
+
+- Input, output size was changed to 512
+
+----------------------------------
 # Changes compared to [affinelayer/pix2pix-tensorflow](https://github.com/affinelayer/pix2pix-tensorflow)
 
 - Input, output size increased to 1024 - more layers!

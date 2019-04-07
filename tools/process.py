@@ -169,7 +169,7 @@ imwrite(E, output_path);
         config = dict(
             input_path="'%s'" % mat_file.name,
             output_path="'%s'" % png_file.name,
-            image_width=1024,
+            image_width=512,
             threshold=25.0/255.0,
             small_edge=5,
         )
