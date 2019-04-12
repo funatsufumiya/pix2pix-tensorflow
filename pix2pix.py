@@ -15,7 +15,7 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input_dir", help="path to folder containing images")
-parser.add_argument("--mode", required=True, choices=["train", "test", "export"])
+parser.add_argument("--mode", required=True, choices=["train", "test", "export", "spout"])
 parser.add_argument("--output_dir", required=True, help="where to put output files")
 parser.add_argument("--seed", type=int)
 parser.add_argument("--checkpoint", default=None, help="directory with checkpoint to resume training from or use for testing")
@@ -559,6 +559,17 @@ def append_index(filesets, step=False):
         index.write("</tr>")
     return index_path
 
+import os
+#import IPython
+import sys
+
+import numpy as np
+sys.path.append('./SpoutSDK')
+import SpoutSDK
+import pygame
+from pygame.locals import *
+from OpenGL.GL import *
+from OpenGL.GLU import *
 
 def main():
     if tf.__version__.split('.')[0] != "1":
@@ -574,9 +585,10 @@ def main():
     if not os.path.exists(a.output_dir):
         os.makedirs(a.output_dir)
 
-    if a.mode == "test" or a.mode == "export":
+    if a.mode == "test" or a.mode == "export" or a.mode == "spout":
         if a.checkpoint is None:
-            raise Exception("checkpoint required for test mode")
+        	a.checkpoint = a.output_dir
+            #raise Exception("checkpoint required for test mode")
 
         # load some options from the checkpoint
         options = {"which_direction", "ngf", "ndf", "lab_colorization"}
@@ -646,9 +658,188 @@ def main():
             print("loading model from checkpoint")
             checkpoint = tf.train.latest_checkpoint(a.checkpoint)
             restore_saver.restore(sess, checkpoint)
+
             print("exporting model")
             export_saver.export_meta_graph(filename=os.path.join(a.output_dir, "export.meta"))
             export_saver.save(sess, os.path.join(a.output_dir, "export"), write_meta_graph=False)
+
+        return
+    elif a.mode == "spout":
+        print("spout mode")
+
+        if a.lab_colorization:
+            raise Exception("export not supported for lab_colorization")
+
+        # input = tf.placeholder(tf.string, shape=[1])
+        # input_data = tf.decode_base64(input[0])
+        # input_image = tf.image.decode_png(input_data)
+
+        # remove alpha channel if present
+        # input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 4), lambda: input_image[:,:,:3], lambda: input_image)
+        # convert grayscale to RGB
+        # input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 1), lambda: tf.image.grayscale_to_rgb(input_image), lambda: input_image)
+
+        # input_image = tf.image.convert_image_dtype(input_image, dtype=tf.float32)
+
+        input = tf.placeholder(tf.float32, shape=[512,512,3], name="input")
+        input_image = tf.image.convert_image_dtype(input, dtype=tf.float32)
+        input_image.set_shape([CROP_SIZE, CROP_SIZE, 3])
+        batch_input = tf.expand_dims(input_image, axis=0)
+
+        with tf.variable_scope("generator"):
+            batch_output = deprocess(create_generator(preprocess(batch_input), 3))
+
+        output_image = tf.image.convert_image_dtype(batch_output, dtype=tf.uint8)[0]
+        # if a.output_filetype == "png":
+        output_png = tf.image.encode_png(output_image)
+
+        logdir = a.output_dir if (a.trace_freq > 0 or a.summary_freq > 0) else None
+        #sv = tf.train.Supervisor(logdir=logdir, save_summaries_secs=0, saver=None)
+        #with sv.managed_session() as sess:
+
+        init_op = tf.global_variables_initializer()
+        restore_saver = tf.train.Saver()
+        export_saver = tf.train.Saver()
+
+        with tf.Session() as sess:
+            sess.run(init_op)
+            print("loading model from checkpoint")
+            checkpoint = tf.train.latest_checkpoint(a.checkpoint)
+            restore_saver.restore(sess, checkpoint)
+        
+            width = 512
+            height = 512
+            display = (width,height)
+        
+            pygame.init() 
+            pygame.display.set_caption('Spout Python Sender')
+            pygame.display.set_mode(display, DOUBLEBUF|OPENGL)
+            pygame.display.gl_set_attribute(pygame.GL_ALPHA_SIZE, 8)
+        
+            # OpenGL init
+            glMatrixMode(GL_PROJECTION)
+            glLoadIdentity()
+            glOrtho(0,width,height,0,1,-1)
+            glMatrixMode(GL_MODELVIEW)
+            glDisable(GL_DEPTH_TEST)
+            glClearColor(0.0,0.0,0.0,0.0)
+            glEnable(GL_TEXTURE_2D)
+        
+            # init spout receiver
+            receiverName = "FBO"
+            spoutReceiver = SpoutSDK.SpoutReceiver()
+            spoutReceiverWidth = width
+            spoutReceiverHeight = height
+            spoutReceiver.pyCreateReceiver(receiverName, spoutReceiverWidth, spoutReceiverHeight, False)
+        
+            # init spout sender
+            spoutSender = SpoutSDK.SpoutSender()
+            spoutSenderWidth = width
+            spoutSenderHeight = height
+            spoutSender.CreateSender('Spout Python Sender', spoutSenderWidth, spoutSenderHeight, 0)
+        
+            print("width, height = ", width, height)
+        
+            # init spout sender texture ID
+            senderTextureID = glGenTextures(1)
+            receiverTextureID = glGenTextures(1)
+        
+            if type(senderTextureID) is not int:
+                senderTextureID = senderTextureID.item()
+                receiverTextureID = receiverTextureID.item()
+        
+            # initialize texture
+            glBindTexture(GL_TEXTURE_2D, receiverTextureID)
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+            # fill texture with blank data
+            glCopyTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,0,0,spoutSenderWidth,spoutSenderHeight,0)
+            glBindTexture(GL_TEXTURE_2D, 0)
+        
+            while True:
+                glBindTexture(GL_TEXTURE_2D, receiverTextureID)
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+
+                flag = spoutReceiver.pyReceiveTexture(receiverName, spoutReceiverWidth, spoutReceiverHeight, receiverTextureID, GL_TEXTURE_2D, False, 0)
+
+                # copy pixel byte array from received texture   
+                data = glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, outputType=None)  #Using GL_RGB can use GL_RGBA 
+                glBindTexture(GL_TEXTURE_2D, 0)
+                # swap width and height data around due to oddness with glGetTextImage. http://permalink.gmane.org/gmane.comp.python.opengl.user/2423
+                
+                # img = Image.fromarray(data)
+                # img.show()
+                # sys.exit()
+
+                #data.shape = (1, data.shape[2], data.shape[1], data.shape[0])
+                #data = (np.transpose(data, (2, 0, 1))[np.newaxis, :, :, :] / 255.0 * 2.0 - 1.0).astype(float)
+                data = (data / 255.0 * 2.0 - 1.0).astype(float)
+                #input_data = tf.convert_to_tensor(data, dtype=tf.float32)
+
+                # --- if save image as png
+                # result = sess.run(output_png, feed_dict={input: data})
+                # with open("test.png", 'wb') as fd:
+                #     fd.write(result)
+                # return
+
+                result = sess.run(output_image, feed_dict={input: data})
+                #output = util.tensor2im(visuals["fake_B"])
+
+                # setup the texture so we can load the stylised output into it
+                glBindTexture(GL_TEXTURE_2D, senderTextureID)
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+                # copy output into texture
+                glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, spoutSenderWidth, spoutSenderHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, result )
+                
+                # setup window to draw to screen
+                glActiveTexture(GL_TEXTURE0)
+
+                # clean start
+                glClear(GL_COLOR_BUFFER_BIT  | GL_DEPTH_BUFFER_BIT )
+                # reset drawing perspective
+                glLoadIdentity()
+            
+                # draw texture on screen
+                glBegin(GL_QUADS)
+
+                glTexCoord(0,0)        
+                glVertex2f(0,0)
+
+                glTexCoord(1,0)
+                glVertex2f(spoutSenderWidth,0)
+
+                glTexCoord(1,1)
+                glVertex2f(spoutSenderWidth,spoutSenderHeight)
+
+                glTexCoord(0,1)
+                glVertex2f(0,spoutSenderHeight)
+
+                glEnd()
+                        
+                # update window
+                pygame.display.flip()        
+
+                spoutSender.SendTexture(senderTextureID, GL_TEXTURE_2D, spoutSenderWidth, spoutSenderHeight, False, 0)
+
+                #pygame.time.wait(10)
+                pygame.time.wait(1000)
+                #IPython.embed()
+                #pygame.quit()
+                #sys.exit(1)
+
+                for event in pygame.event.get():
+                    if event.type == QUIT:
+                        spoutReceiver.ReleaseReceiver()
+                        pygame.quit()
+                        sys.exit()
 
         return
 
@@ -735,7 +926,7 @@ def main():
     with tf.name_scope("parameter_count"):
         parameter_count = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) for v in tf.trainable_variables()])
 
-    saver = tf.train.Saver(max_to_keep=1)
+    saver = tf.train.Saver(max_to_keep=30)
 
     logdir = a.output_dir if (a.trace_freq > 0 or a.summary_freq > 0) else None
     sv = tf.train.Supervisor(logdir=logdir, save_summaries_secs=0, saver=None)
@@ -765,6 +956,26 @@ def main():
                 index_path = append_index(filesets)
 
             print("wrote index at", index_path)
+
+        # elif a.mode == "spout":
+        #     # testing with spout
+        #     # at most, process the test data once
+        #     print("spout mode")
+        #     # max_steps = min(examples.steps_per_epoch, max_steps)
+        #     # for step in range(max_steps):
+        #     #     results = sess.run(display_fetches)
+        #     #     filesets = save_images(results)
+        #     #     for i, f in enumerate(filesets):
+        #     #         print("evaluated image", f["name"])
+        #     #     index_path = append_index(filesets)
+
+        #     writer = tf.summary.FileWriter("graph", sess.graph)
+        #     results = sess.run(display_fetches)
+        #     writer.close()
+        
+        #     # model.
+        #     # results = sess.run(model, feed_dict=[])
+        
         else:
             # training
             start = time.time()
