@@ -15,10 +15,12 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input_dir", help="path to folder containing images")
-parser.add_argument("--mode", required=True, choices=["train", "test", "export", "spout"])
+parser.add_argument("--mode", required=True, choices=["test","spout"])
 parser.add_argument("--output_dir", required=True, help="where to put output files")
 parser.add_argument("--seed", type=int)
-parser.add_argument("--checkpoint", default=None, help="directory with checkpoint to resume training from or use for testing")
+#parser.add_argument("--checkpoint", default=None, help="directory with checkpoint to resume training from or use for testing")
+parser.add_argument("--checkpoint_one", default=None, help="directory with checkpoint to resume training from or use for testing")
+parser.add_argument("--checkpoint_two", default=None, help="directory with checkpoint to resume training from or use for testing")
 
 parser.add_argument("--max_steps", type=int, help="number of training steps (0 to disable)")
 parser.add_argument("--max_epochs", type=int, help="number of training epochs")
@@ -585,14 +587,17 @@ def main():
     if not os.path.exists(a.output_dir):
         os.makedirs(a.output_dir)
 
-    if a.mode == "test" or a.mode == "export" or a.mode == "spout":
-        if a.checkpoint is None:
-        	a.checkpoint = a.output_dir
-            #raise Exception("checkpoint required for test mode")
+    if a.mode == "test" or a.mode == "spout":
+        if a.checkpoint_one is None:
+        	#a.checkpoint = a.output_dir
+            raise Exception("checkpoint_one required for test mode")
+
+        if a.checkpoint_two is None:
+            raise Exception("checkpoint_two required for test mode")
 
         # load some options from the checkpoint
         options = {"which_direction", "ngf", "ndf", "lab_colorization"}
-        with open(os.path.join(a.checkpoint, "options.json")) as f:
+        with open(os.path.join(a.checkpoint_one, "options.json")) as f:
             for key, val in json.loads(f.read()).items():
                 if key in options:
                     print("loaded", key, "=", val)
@@ -607,109 +612,64 @@ def main():
     with open(os.path.join(a.output_dir, "options.json"), "w") as f:
         f.write(json.dumps(vars(a), sort_keys=True, indent=4))
 
-    if a.mode == "export":
-        # export the generator to a meta graph that can be imported later for standalone generation
-        if a.lab_colorization:
-            raise Exception("export not supported for lab_colorization")
-
-        input = tf.placeholder(tf.string, shape=[1])
-        input_data = tf.decode_base64(input[0])
-        input_image = tf.image.decode_png(input_data)
-
-        # remove alpha channel if present
-        input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 4), lambda: input_image[:,:,:3], lambda: input_image)
-        # convert grayscale to RGB
-        input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 1), lambda: tf.image.grayscale_to_rgb(input_image), lambda: input_image)
-
-        input_image = tf.image.convert_image_dtype(input_image, dtype=tf.float32)
-        input_image.set_shape([CROP_SIZE, CROP_SIZE, 3])
-        batch_input = tf.expand_dims(input_image, axis=0)
-
-        with tf.variable_scope("generator"):
-            batch_output = deprocess(create_generator(preprocess(batch_input), 3))
-
-        output_image = tf.image.convert_image_dtype(batch_output, dtype=tf.uint8)[0]
-        if a.output_filetype == "png":
-            output_data = tf.image.encode_png(output_image)
-        elif a.output_filetype == "jpeg":
-            output_data = tf.image.encode_jpeg(output_image, quality=80)
-        else:
-            raise Exception("invalid filetype")
-        output = tf.convert_to_tensor([tf.encode_base64(output_data)])
-
-        key = tf.placeholder(tf.string, shape=[1])
-        inputs = {
-            "key": key.name,
-            "input": input.name
-        }
-        tf.add_to_collection("inputs", json.dumps(inputs))
-        outputs = {
-            "key":  tf.identity(key).name,
-            "output": output.name,
-        }
-        tf.add_to_collection("outputs", json.dumps(outputs))
-
-        init_op = tf.global_variables_initializer()
-        restore_saver = tf.train.Saver()
-        export_saver = tf.train.Saver()
-
-        with tf.Session() as sess:
-            sess.run(init_op)
-            print("loading model from checkpoint")
-            checkpoint = tf.train.latest_checkpoint(a.checkpoint)
-            restore_saver.restore(sess, checkpoint)
-
-            print("exporting model")
-            export_saver.export_meta_graph(filename=os.path.join(a.output_dir, "export.meta"))
-            export_saver.save(sess, os.path.join(a.output_dir, "export"), write_meta_graph=False)
-
-        return
-    elif a.mode == "spout":
+    if a.mode == "spout":
         print("spout mode")
 
         if a.lab_colorization:
             raise Exception("export not supported for lab_colorization")
 
-        # input = tf.placeholder(tf.string, shape=[1])
-        # input_data = tf.decode_base64(input[0])
-        # input_image = tf.image.decode_png(input_data)
+        def create_model():
+            input = tf.placeholder(tf.float32, shape=[512,512,3], name="input")
+            input_image = tf.image.convert_image_dtype(input, dtype=tf.float32)
+            input_image.set_shape([CROP_SIZE, CROP_SIZE, 3])
+            batch_input = tf.expand_dims(input_image, axis=0)
 
-        # remove alpha channel if present
-        # input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 4), lambda: input_image[:,:,:3], lambda: input_image)
-        # convert grayscale to RGB
-        # input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 1), lambda: tf.image.grayscale_to_rgb(input_image), lambda: input_image)
+            with tf.variable_scope("generator"):
+                batch_output = deprocess(create_generator(preprocess(batch_input), 3))
 
-        # input_image = tf.image.convert_image_dtype(input_image, dtype=tf.float32)
+            output_image = tf.image.convert_image_dtype(batch_output, dtype=tf.uint8)[0]
+            #output_png = tf.image.encode_png(output_image)
 
-        input = tf.placeholder(tf.float32, shape=[512,512,3], name="input")
-        input_image = tf.image.convert_image_dtype(input, dtype=tf.float32)
-        input_image.set_shape([CROP_SIZE, CROP_SIZE, 3])
-        batch_input = tf.expand_dims(input_image, axis=0)
+            logdir = a.output_dir if (a.trace_freq > 0 or a.summary_freq > 0) else None
+            init_op = tf.global_variables_initializer()
+            restore_saver = tf.train.Saver()
+            export_saver = tf.train.Saver()
+            return {
+                'input': input,
+                'output_image': output_image,
+                'init_op': init_op,
+                'restore_saver': restore_saver
+            }
 
-        with tf.variable_scope("generator"):
-            batch_output = deprocess(create_generator(preprocess(batch_input), 3))
+        model1 = None
+        model2 = None
+        sess1 = None
+        sess2 = None
 
-        output_image = tf.image.convert_image_dtype(batch_output, dtype=tf.uint8)[0]
-        # if a.output_filetype == "png":
-        output_png = tf.image.encode_png(output_image)
+        with tf.Graph().as_default() as g1:
+            sess1 = tf.Session( graph = g1 )
+            model1 = create_model()
+            sess1.run(model1["init_op"])
+            print("loading model from checkpoint_one")
+            checkpoint_one = tf.train.latest_checkpoint(a.checkpoint_one)
+            model1["restore_saver"].restore(sess1, checkpoint_one)
 
-        logdir = a.output_dir if (a.trace_freq > 0 or a.summary_freq > 0) else None
-        #sv = tf.train.Supervisor(logdir=logdir, save_summaries_secs=0, saver=None)
-        #with sv.managed_session() as sess:
-
-        init_op = tf.global_variables_initializer()
-        restore_saver = tf.train.Saver()
-        export_saver = tf.train.Saver()
-
-        with tf.Session() as sess:
-            sess.run(init_op)
-            print("loading model from checkpoint")
-            checkpoint = tf.train.latest_checkpoint(a.checkpoint)
-            restore_saver.restore(sess, checkpoint)
+        #tf.reset_default_graph()
         
+        with tf.Graph().as_default() as g2:
+            sess2 = tf.Session( graph = g2 )
+            model2 = create_model()
+            sess2.run(model2["init_op"])
+            print("loading model from checkpoint_two")
+            checkpoint_two = tf.train.latest_checkpoint(a.checkpoint_two)
+            model2["restore_saver"].restore(sess2, checkpoint_two)
+
+        #tf.reset_default_graph()
+        
+        if True:
             width = 512
             height = 512
-            display = (width,height)
+            display = (width*2,height)
         
             pygame.init() 
             pygame.display.set_caption('Spout Python Sender')
@@ -719,7 +679,7 @@ def main():
             # OpenGL init
             glMatrixMode(GL_PROJECTION)
             glLoadIdentity()
-            glOrtho(0,width,height,0,1,-1)
+            glOrtho(0,width*2,height,0,1,-1)
             glMatrixMode(GL_MODELVIEW)
             glDisable(GL_DEPTH_TEST)
             glClearColor(0.0,0.0,0.0,0.0)
@@ -787,7 +747,11 @@ def main():
                 #     fd.write(result)
                 # return
 
-                result = sess.run(output_image, feed_dict={input: data})
+                data_img = sess1.run(model1["output_image"], feed_dict={model1['input']: data})
+                data = (data_img / 255.0 * 2.0 - 1.0).astype(float)
+                result = sess2.run(model2["output_image"], feed_dict={model2['input']: data})
+                # result = sess2.run(model2["output_image"], feed_dict={model2['input']: data})
+
                 #output = util.tensor2im(visuals["fake_B"])
 
                 # setup the texture so we can load the stylised output into it
@@ -797,6 +761,7 @@ def main():
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
                 # copy output into texture
+                #glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, spoutSenderWidth, spoutSenderHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, data )
                 glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, spoutSenderWidth, spoutSenderHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, result )
                 
                 # setup window to draw to screen
@@ -806,22 +771,29 @@ def main():
                 glClear(GL_COLOR_BUFFER_BIT  | GL_DEPTH_BUFFER_BIT )
                 # reset drawing perspective
                 glLoadIdentity()
-            
+
                 # draw texture on screen
                 glBegin(GL_QUADS)
-
                 glTexCoord(0,0)        
                 glVertex2f(0,0)
-
                 glTexCoord(1,0)
                 glVertex2f(spoutSenderWidth,0)
-
                 glTexCoord(1,1)
                 glVertex2f(spoutSenderWidth,spoutSenderHeight)
-
                 glTexCoord(0,1)
                 glVertex2f(0,spoutSenderHeight)
+                glEnd()
 
+                glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, spoutSenderWidth, spoutSenderHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, data_img )
+                glBegin(GL_QUADS)
+                glTexCoord(0,0)        
+                glVertex2f(spoutSenderWidth,0)
+                glTexCoord(1,0)
+                glVertex2f(spoutSenderWidth*2,0)
+                glTexCoord(1,1)
+                glVertex2f(spoutSenderWidth*2,spoutSenderHeight)
+                glTexCoord(0,1)
+                glVertex2f(spoutSenderWidth,spoutSenderHeight)
                 glEnd()
                         
                 # update window
@@ -839,6 +811,8 @@ def main():
                     if event.type == QUIT:
                         spoutReceiver.ReleaseReceiver()
                         pygame.quit()
+                        sess1.close()
+                        sess2.close()
                         sys.exit()
 
         return
@@ -933,9 +907,9 @@ def main():
     with sv.managed_session() as sess:
         print("parameter_count =", sess.run(parameter_count))
 
-        if a.checkpoint is not None:
-            print("loading model from checkpoint")
-            checkpoint = tf.train.latest_checkpoint(a.checkpoint)
+        if a.checkpoint_one is not None:
+            print("loading model from checkpoint_one")
+            checkpoint = tf.train.latest_checkpoint(a.checkpoint_one)
             saver.restore(sess, checkpoint)
 
         max_steps = 2**32
